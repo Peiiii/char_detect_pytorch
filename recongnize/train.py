@@ -3,13 +3,17 @@ import torchvision.models as models
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 import torchvision
-from .utils.data_iterator import DataLoader
-from . import config as cfg
+from .utils.data_iterator import DataLoader,DataGenerator
+from .config import config as cfg
+CFG=cfg
 import numpy as np
+from .gen_char_img.renderer import Renderer
 
 
 class Trainer:
-    def __init__(self):
+    def __init__(self,config={}):
+        cfg=CFG
+        cfg.update(config)
         self.restore = cfg.restore
         self.weights_dir = cfg.weights_dir
         self.weights_init = cfg.weights_init
@@ -24,6 +28,8 @@ class Trainer:
 
         self.train_data_dir = cfg.train_data_dir
         self.val_data_dir = cfg.val_data_dir
+
+        self.weights_save_path=cfg.weights_save_path
 
     def get_model(self):
         if self.restore:
@@ -47,11 +53,13 @@ class Trainer:
         self.val_acc = 0
 
     def val_and_save(self, watch_bad_epoch=False):
+        # print('skip validation step...')
+        # return
         acc, _ = self.val()
         if acc > self.best_accuracy:
             self.bad_epoch = 0
             self.best_accuracy = acc
-            save_path = self.weights_dir + '/tmp_best.model'
+            save_path = self.weights_save_path
             torch.save(self.model, save_path)
             self.log('new best accuracy %s , model save to %s' % (acc, save_path))
         elif watch_bad_epoch and self.train_acc > 0.95:
@@ -74,10 +82,10 @@ class Trainer:
 
         criterion = torch.nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.3)
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.3)
 
         self.model.train()
-        for epoch in range(1000):
+        for epoch in range(10000):
             train_loss = []
             train_acc = []
             self.model.train()
@@ -94,7 +102,8 @@ class Trainer:
                 optimizer.step()
 
                 _, preds = torch.max(preds, 1)
-                acc = float((preds == labels).sum() / len(preds))
+                correct=(preds == labels)
+                acc = float(correct.sum()) / len(preds)
                 train_acc.append(acc)
                 if i % 100 == 0:
                     print('\nepoch/step: %s/%s, batch_train_acc: %s , batch_train_loss: %s ' % (
@@ -102,20 +111,24 @@ class Trainer:
                 else:
                     print('*', end='')
 
-                if i % self.val_step == self.val_step - 1:
-                    # continue
-                    self.val_and_save()
+                # if (i+1) % self.val_step == 0:
+                #     # continue
+                #     self.val_and_save()
 
             train_acc = np.average(train_acc)
             train_loss = np.average(train_loss)
             print('\nepoch: %s, train_acc: %s , train_loss: %s ' % (epoch, train_acc, train_loss))
 
             self.train_acc = train_acc
-            self.val_and_save(watch_bad_epoch=True)
+            if (epoch+1)%5==0:
+                self.val_and_save(watch_bad_epoch=True)
+                torch.save(self.model,self.weights_save_path)
+                print('save model to %s '%(self.weights_save_path))
 
             lr_scheduler.step()
 
     def val(self):
+
         val_transform = transforms.Compose([
             transforms.Resize((64, 64)),
             transforms.ToTensor(),
@@ -136,7 +149,7 @@ class Trainer:
             loss_all.append(float(loss))
 
             _, preds = torch.max(preds, 1)
-            acc_all.append(float((preds == labels).sum() / len(preds)))
+            acc_all.append(float((preds == labels).sum()) / len(preds))
         acc = np.average(acc_all)
         loss = np.average(loss_all)
 
@@ -146,6 +159,7 @@ class Trainer:
     def log(self, text, show=True):
         print('\n')
         with open(self.log_path, 'a') as f:
+            text+='\n'
             f.write(text)
             if show:
                 self.shout(text)
@@ -155,6 +169,52 @@ class Trainer:
 
     def accuracy(self, preds, labels):
         return
+    def train_online(self):
+        self.init_train()
+        R=Renderer(charset=cfg.charset)
+        train_feeder = DataGenerator(gen_data=R.gen_random_img,
+                                  batch_size=self.batch_size,
+                                  charset=cfg.charset,
+                                  flags=['torch'])
+
+        criterion = torch.nn.CrossEntropyLoss()
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.3)
+
+        self.model.train()
+        train_loss_list = []
+        train_acc_list = []
+        self.model.train()
+        for i, data in enumerate(train_feeder):
+            imgs, labels = data
+            imgs, labels = torch.Tensor(imgs), torch.Tensor(labels).long()
+            imgs, labels = imgs.cuda(self.device), labels.cuda(self.device)
+
+            optimizer.zero_grad()
+            preds = self.model(imgs)
+            loss = criterion(preds, labels)
+            train_loss_list.append(float(loss))
+            loss.backward()
+            optimizer.step()
+
+            _, preds = torch.max(preds, 1)
+            acc = float((preds == labels).sum())/ len(preds)
+            train_acc_list.append(acc)
+
+            print('\nstep:%s, batch_train_acc: %s , batch_train_loss: %s ' % (i, acc, float(loss))) if i % 100 == 0 else print('*', end='')
+            self.val_and_save() if i % self.val_step == self.val_step - 1 else None
+            train_acc_list.pop(0) if len(train_acc_list)>30 else None
+            train_loss_list.pop(0) if len(train_loss_list)>30 else None
+            train_acc = np.average(train_acc_list)
+            train_loss = np.average(train_loss_list)
+            print('\ntrain_acc: %s , train_loss: %s ' % (train_acc, train_loss)) if i % 100 == 0 else None
+
+            self.train_acc = train_acc
+            if (i+1)%500 ==0:
+                self.val_and_save(watch_bad_epoch=True)
+
+            if (i+1)%100==0:
+                lr_scheduler.step()
 
     def train(self):
         self.init_train()
@@ -165,7 +225,7 @@ class Trainer:
 
         criterion = torch.nn.CrossEntropyLoss()
         optimizer = torch.optim.Adam(self.model.parameters(), lr=0.001)
-        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.3)
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.3)
 
         self.model.train()
         for epoch in range(1000):

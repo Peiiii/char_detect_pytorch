@@ -16,7 +16,7 @@ from . import utils
 def r(val):
     return int(np.random.random() * val)
 class Renderer:
-    def __init__(self,font_dir=cfg.ROOT+'/data/fonts',bg_dir=cfg.ROOT+'/data/bgs',bg_mode='RGBA',scale=1.5):
+    def __init__(self,font_dir=cfg.ROOT+'/data/fonts',bg_dir=cfg.ROOT+'/data/bgs',bg_mode='RGBA',scale=1.5,charset=None):
         self.font_dir=font_dir
         self.bg_dir=bg_dir
         flist=os.listdir(font_dir)
@@ -35,6 +35,12 @@ class Renderer:
         self.bg_size=(int(self.canvas_size[0]*2),int(self.canvas_size[1]*2))
 
         self.blur_rate=0.2
+
+        self.charset=charset
+    def gen_random_img(self):
+        char=random.choice(self.charset)
+        img=self.gen_one_img(char).convert('RGB')
+        return self.pil2np(img),char
 
     def get_random_font(self,font_size=60):
         font_size=self.font_size

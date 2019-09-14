@@ -20,6 +20,55 @@ class DataIterator:
     def __len__(self):
         return self.max_step
 
+class DataGenerator:
+    def __init__(self,gen_data,batch_size=32,charset=None,flags=[]):
+        self.batch_size = batch_size
+        self.current_batch = None
+        self.charset=charset
+        self.flags=flags
+        self.gen_data=gen_data
+
+
+    def __iter__(self):
+        return self
+    def __len__(self):
+        import math
+        return math.inf
+    def __next__(self):
+        xs,ys=[],[]
+        for i in range(self.batch_size):
+            x,y=self.gen_data()
+            x=self.preprocess_x(x)
+            y=self.charset.index(y)
+            # xs=np.append(xs,x)
+            # ys=np.append(ys,y)
+            xs.append(x)
+            ys.append(y)
+
+        xs=np.array(xs)
+        ys=np.array(ys).astype(np.long)
+        # print(xs.shape)
+        self.current_batch={
+            'xs':xs,
+            'labels':ys
+        }
+        # print(np.array(ys).astype(np.int32))
+        return (xs,ys)
+
+    def preprocess_x(self, x):
+        x = cv2.resize(x, (64, 64))
+        # x = cv2.normalize(x, None, -1, 1, norm_type=cv2.NORM_MINMAX)
+        x=self.normalize(x)
+        if 'torch' in self.flags:
+            x=np.transpose(x,[2,0,1])
+        return x
+    def normalize(self,x):
+        m=np.average(x)
+        s=np.std(x)
+        x=(x-m)/s
+        return x
+
+
 
 class DataLoader:
     def __init__(self, data_dir, batch_size=32,charset=None,flags=[]):
@@ -35,6 +84,8 @@ class DataLoader:
         self.flags=flags
     def __iter__(self):
         return self
+    def __len__(self):
+        return self.num_batches
 
     def __next__(self):
         self.batch_index += 1
@@ -53,12 +104,10 @@ class DataLoader:
         }
         return (xs, labels)
 
-    def __len__(self):
-        return self.num_batches
-
     def preprocess_x(self, x):
         x = cv2.resize(x, (64, 64))
-        x = cv2.normalize(x, None, -1, 1, norm_type=cv2.NORM_MINMAX)
+        # x = cv2.normalize(x, None, -1, 1, norm_type=cv2.NORM_MINMAX)
+        x=self.normalize(x)
         if 'torch' in self.flags:
             x=np.transpose(x,[2,0,1])
         return x
@@ -80,14 +129,8 @@ class DataLoader:
             return vec
         else:
             return index
-    def get_categorical(self, char, charset):
-        index = charset.index(char)
-        vec = np.zeros((len(charset),))
-        vec[index] = 1
-        return vec
-
-# D = DataIterator()
-# for i in D:
-# 	print(i)
-# for i in D:
-# 	print(i)
+    def normalize(self,x):
+        m=np.average(x)
+        s=np.std(x)
+        x=(x-m)/s
+        return x
